@@ -165,12 +165,15 @@ pub fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> Result<()> {
             .write_all(contents)
             .with_context(|| format!("could not write to file: {}", tmp_path.display()))?;
 
-        // Set the owner of the tmpfile (UNIX only).
+        // Preserve the owner and permissions of an existing file (UNIX only).
         #[cfg(unix)]
         if let Ok(metadata) = path.metadata() {
             use std::os::unix::fs::{MetadataExt, fchown};
 
             _ = fchown(&tmp_file, Some(metadata.uid()), Some(metadata.gid()));
+            tmp_file.set_permissions(metadata.permissions()).with_context(|| {
+                format!("could not set file permissions: {}", tmp_path.display())
+            })?;
         }
 
         // Close and rename the tmpfile.
@@ -377,4 +380,24 @@ pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf> {
 pub fn to_lowercase(s: impl AsRef<str>) -> String {
     let s = s.as_ref();
     if s.is_ascii() { s.to_ascii_lowercase() } else { s.to_lowercase() }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    #[test]
+    fn write_preserves_permissions() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("db.zo");
+        fs::write(&path, b"old contents").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+
+        write(&path, b"new contents").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"new contents");
+        assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o444);
+    }
 }
