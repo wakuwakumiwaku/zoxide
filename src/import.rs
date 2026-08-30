@@ -29,7 +29,7 @@ pub(crate) trait Importer {
     fn dirs(&self) -> Result<impl Iterator<Item = Result<Dir<'static>, ImportError>>>;
 }
 
-/// A single record that failed to import.
+/// A record or input source that failed to import.
 #[derive(Debug)]
 pub(crate) struct ImportError {
     /// Path of the source file containing the offending record. `None` if the
@@ -41,6 +41,9 @@ pub(crate) struct ImportError {
 
     /// Underlying reason the record could not be imported.
     pub source: anyhow::Error,
+
+    /// Whether this error invalidates the input stream rather than one record.
+    pub fatal: bool,
 }
 
 /// Drives a single importer end-to-end: writes each `Ok` dir into the
@@ -67,6 +70,9 @@ pub(crate) fn run(importer: &impl Importer, db: &mut Database) -> Result<()> {
                     Some(path) => format!("{}:{}", path.display(), e.line_num),
                     None => format!("line {}", e.line_num),
                 };
+                if e.fatal {
+                    return Err(e.source.context(location));
+                }
                 _ = writeln!(stderr, "{location}: {:#}", e.source);
             }
         }
@@ -79,4 +85,40 @@ pub(crate) fn run(importer: &impl Importer, db: &mut Database) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::anyhow;
+
+    use super::*;
+
+    struct FailingImporter;
+
+    impl Importer for FailingImporter {
+        fn dirs(&self) -> Result<impl Iterator<Item = Result<Dir<'static>, ImportError>>> {
+            Ok(vec![
+                Ok(Dir { path: "/tmp".into(), rank: 1.0, last_accessed: 0 }),
+                Err(ImportError {
+                    path: None,
+                    line_num: 2,
+                    source: anyhow!("source failed"),
+                    fatal: true,
+                }),
+            ]
+            .into_iter())
+        }
+    }
+
+    #[test]
+    fn fatal_source_error_aborts_without_saving_partial_records() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let mut db = Database::open_dir(data_dir.path()).unwrap();
+
+        let error = run(&FailingImporter, &mut db).unwrap_err();
+        drop(db);
+
+        assert!(format!("{error:#}").contains("source failed"));
+        assert!(!data_dir.path().join("db.zo").exists());
+    }
 }

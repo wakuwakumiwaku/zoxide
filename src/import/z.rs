@@ -34,7 +34,11 @@ impl<R: BufRead> Iter<R> {
     }
 
     fn err(&self, source: anyhow::Error) -> ImportError {
-        ImportError { path: Some(self.path.clone()), line_num: self.line_num, source }
+        ImportError { path: Some(self.path.clone()), line_num: self.line_num, source, fatal: false }
+    }
+
+    fn fatal(&self, source: anyhow::Error) -> ImportError {
+        ImportError { path: Some(self.path.clone()), line_num: self.line_num, source, fatal: true }
     }
 
     fn parse_line(&self, line: &[u8]) -> Result<Dir<'static>, ImportError> {
@@ -80,7 +84,7 @@ impl<R: BufRead> Iterator for Iter<R> {
                     }
                     return Some(self.parse_line(&self.buf));
                 }
-                Err(e) => return Some(Err(self.err(anyhow::Error::from(e)))),
+                Err(e) => return Some(Err(self.fatal(anyhow::Error::from(e)))),
             }
         }
     }
@@ -99,5 +103,38 @@ fn data_path() -> Result<PathBuf> {
             path.push(".z");
             Ok(path)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Read};
+
+    use super::*;
+
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("read failed"))
+        }
+    }
+
+    impl BufRead for FailingReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            Err(io::Error::other("read failed"))
+        }
+
+        fn consume(&mut self, _: usize) {}
+    }
+
+    #[test]
+    fn read_errors_are_fatal() {
+        let mut iter = Iter::new(FailingReader, PathBuf::from("history"));
+
+        let error = iter.next().unwrap().unwrap_err();
+
+        assert!(error.fatal);
+        assert!(error.source.to_string().contains("read failed"));
     }
 }

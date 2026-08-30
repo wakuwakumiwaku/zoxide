@@ -34,16 +34,21 @@ struct Iter {
     line_num: usize,
 
     child: Child,
+    finished: bool,
     prev_cwd: Option<String>,
 }
 
 impl Iter {
     fn new(reader: BufReader<ChildStdout>, child: Child) -> Self {
-        Self { reader, buf: Vec::new(), line_num: 0, child, prev_cwd: None }
+        Self { reader, buf: Vec::new(), line_num: 0, child, finished: false, prev_cwd: None }
     }
 
     fn err(&self, source: anyhow::Error) -> ImportError {
-        ImportError { path: None, line_num: self.line_num, source }
+        ImportError { path: None, line_num: self.line_num, source, fatal: false }
+    }
+
+    fn fatal(&self, source: anyhow::Error) -> ImportError {
+        ImportError { path: None, line_num: self.line_num, source, fatal: true }
     }
 
     fn parse_line(&self, line: &[u8]) -> Result<Dir<'static>, ImportError> {
@@ -67,6 +72,19 @@ impl Iter {
         };
         Ok(dir)
     }
+
+    fn finish(&mut self) -> Option<Result<Dir<'static>, ImportError>> {
+        if self.finished {
+            return None;
+        }
+        self.finished = true;
+
+        match self.child.wait() {
+            Ok(status) if status.success() => None,
+            Ok(status) => Some(Err(self.fatal(anyhow!("atuin exited with status {status}")))),
+            Err(error) => Some(Err(self.fatal(anyhow!(error).context("could not wait for atuin")))),
+        }
+    }
 }
 
 impl Iterator for Iter {
@@ -78,7 +96,7 @@ impl Iterator for Iter {
             self.line_num += 1;
 
             match self.reader.read_until(b'\0', &mut self.buf) {
-                Ok(0) => return None,
+                Ok(0) => return self.finish(),
                 Ok(_) => {
                     if self.buf.last() == Some(&b'\0') {
                         self.buf.pop();
@@ -101,7 +119,7 @@ impl Iterator for Iter {
                     }
                 }
                 Err(e) => {
-                    return Some(Err(self.err(anyhow!(e).context("could not read from atuin"))));
+                    return Some(Err(self.fatal(anyhow!(e).context("could not read from atuin"))));
                 }
             }
         }
@@ -110,7 +128,32 @@ impl Iterator for Iter {
 
 impl Drop for Iter {
     fn drop(&mut self) {
-        _ = self.child.kill();
-        _ = self.child.wait();
+        if !self.finished {
+            _ = self.child.kill();
+            _ = self.child.wait();
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_nonzero_exit_after_partial_output() {
+        let mut child = Command::new("sh")
+            .args(["-c", "printf '2024-01-02 03:04:05\\t/tmp\\0'; exit 7"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut iter = Iter::new(BufReader::new(stdout), child);
+
+        assert_eq!(iter.next().unwrap().unwrap().path, "/tmp");
+        let error = iter.next().unwrap().unwrap_err();
+        assert!(error.fatal);
+        assert!(error.source.to_string().contains("atuin exited with status"));
+        assert!(error.source.to_string().contains('7'));
+        assert!(iter.next().is_none());
     }
 }

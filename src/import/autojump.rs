@@ -34,7 +34,11 @@ impl<R: BufRead> Iter<R> {
     }
 
     fn err(&self, source: anyhow::Error) -> ImportError {
-        ImportError { path: Some(self.path.clone()), line_num: self.line_num, source }
+        ImportError { path: Some(self.path.clone()), line_num: self.line_num, source, fatal: false }
+    }
+
+    fn fatal(&self, source: anyhow::Error) -> ImportError {
+        ImportError { path: Some(self.path.clone()), line_num: self.line_num, source, fatal: true }
     }
 
     fn parse_line(&self, line: &[u8]) -> Result<Dir<'static>, ImportError> {
@@ -78,7 +82,7 @@ impl<R: BufRead> Iterator for Iter<R> {
                     }
                     return Some(self.parse_line(&self.buf));
                 }
-                Err(e) => return Some(Err(self.err(anyhow::Error::from(e)))),
+                Err(e) => return Some(Err(self.fatal(anyhow::Error::from(e)))),
             }
         }
     }
