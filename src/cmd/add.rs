@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 
 use crate::cmd::{Add, Run};
 use crate::db::Database;
@@ -11,6 +11,9 @@ impl Run for Add {
         // These characters can't be printed cleanly to a single line, so they can cause
         // confusion when writing to stdout.
         const EXCLUDE_CHARS: &[char] = &['\n', '\r'];
+
+        let by = self.score.unwrap_or(1.0);
+        ensure!(by.is_finite(), "score must be finite");
 
         let exclude_dirs = config::exclude_dirs()?;
         let max_age = config::maxage()?;
@@ -34,7 +37,6 @@ impl Run for Add {
                 bail!("not a directory: {path}");
             }
 
-            let by = self.score.unwrap_or(1.0);
             db.add_update(path, by, now);
         }
 
