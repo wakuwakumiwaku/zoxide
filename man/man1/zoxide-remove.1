@@ -4,6 +4,10 @@
 .SH SYNOPSIS
 .B zoxide remove [PATHS] [OPTIONS]
 .SH DESCRIPTION
+Paths are matched as stored, then as absolute paths. If neither matches and
+\fB_ZO_RESOLVE_SYMLINKS\fR is set to 1, symlinks are resolved as when adding
+paths. Stored paths can still be removed after they no longer exist.
+.PP
 If you'd like to permanently exclude a directory from the database, see the
 \fB_ZO_EXCLUDE_DIRS\fR environment variable in \fBzoxide\fR(1).
 .SH OPTIONS
