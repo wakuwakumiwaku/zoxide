@@ -123,10 +123,24 @@ impl Database {
         self.with_dirs_mut(|dirs| {
             let total_age = dirs.iter().map(|dir| dir.rank).sum::<Rank>();
             if total_age > max_age {
-                let factor = 0.9 * max_age / total_age;
+                // A sum of finite ranks can overflow even though every entry is
+                // valid. Normalize by the largest rank first in
+                // that case, so the aging factor does not
+                // become zero and delete the entire database.
+                let scale = if total_age.is_infinite() {
+                    dirs.iter().map(|dir| dir.rank).fold(0.0, Rank::max)
+                } else {
+                    1.0
+                };
+                let total = if scale == 1.0 {
+                    total_age
+                } else {
+                    dirs.iter().map(|dir| dir.rank / scale).sum()
+                };
+                let factor = 0.9 * max_age / total;
                 for idx in (0..dirs.len()).rev() {
                     let dir = &mut dirs[idx];
-                    dir.rank *= factor;
+                    dir.rank = (dir.rank / scale) * factor;
                     if dir.rank < 1.0 {
                         dirs.swap_remove(idx);
                     }
