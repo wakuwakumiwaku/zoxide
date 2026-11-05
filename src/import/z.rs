@@ -51,6 +51,9 @@ impl<R: BufRead> Iter<R> {
 
         let rank = split.next().ok_or_else(err)?;
         let rank = rank.parse::<f64>().map_err(|_| err())?;
+        if !rank.is_finite() {
+            return Err(self.err(anyhow!("rank must be finite")));
+        }
 
         let path = split.next().ok_or_else(err)?;
 

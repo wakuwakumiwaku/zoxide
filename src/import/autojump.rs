@@ -46,6 +46,9 @@ impl<R: BufRead> Iter<R> {
         let rank = rank
             .parse::<f64>()
             .map_err(|e| self.err(anyhow!(e).context(format!("invalid rank: {rank}"))))?;
+        if !rank.is_finite() {
+            return Err(self.err(anyhow!("rank must be finite")));
+        }
 
         // Normalize the rank using a sigmoid function. Don't import actual ranks from
         // autojump, since its scoring algorithm is very different and might
